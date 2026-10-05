@@ -1,0 +1,352 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Local AI Site Builder</title>
+<style>
+  :root{--bg:#0f1115;--panel:#161920;--line:#262a34;--text:#e6e8ee;--dim:#8b91a1;--accent:#6d8cff}
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{display:grid;grid-template-columns:200px 380px 1fr;grid-template-rows:minmax(0,1fr);
+       background:var(--bg);color:var(--text);font:14px/1.45 -apple-system,system-ui,sans-serif}
+  aside,#chat,#preview{min-height:0;display:flex;flex-direction:column;background:var(--panel)}
+  aside,#chat{border-right:1px solid var(--line)}
+  header{display:flex;justify-content:space-between;align-items:center;gap:8px;
+         padding:10px 12px;border-bottom:1px solid var(--line)}
+  button{background:var(--accent);color:#fff;border:0;border-radius:6px;padding:6px 10px;cursor:pointer}
+  button:disabled{opacity:.4;cursor:default}
+  button.ghost{background:#222633}
+  button.danger{color:#ff8a8a}
+  ul{list-style:none;margin:0;padding:6px;overflow:auto}
+  #projects{flex:1;min-height:0}
+  li{padding:8px 10px;border-radius:6px;cursor:pointer}
+  li:hover{background:#1f232d} li.sel{background:#252b3b}
+  aside footer{display:flex;flex-wrap:wrap;gap:6px;padding:8px;border-top:1px solid var(--line)}
+  #msgs{flex:1;min-height:0;overflow:auto;padding:12px;display:flex;flex-direction:column;gap:8px}
+  .msg{padding:8px 10px;border-radius:8px;white-space:pre-wrap;max-width:92%;overflow-wrap:anywhere}
+  .msg.user{background:var(--accent);align-self:flex-end}
+  .msg.assistant{background:#222633}
+  #status{color:var(--dim);font-size:12px;max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  details{border-top:1px solid var(--line);padding:6px 12px}
+  summary{cursor:pointer;color:var(--dim)}
+  pre{margin:6px 0 0;max-height:180px;overflow:auto;font-size:11px;color:var(--dim);white-space:pre-wrap}
+  form{display:flex;gap:8px;padding:10px;border-top:1px solid var(--line)}
+  textarea{flex:1;resize:none;background:var(--bg);color:var(--text);border:1px solid var(--line);
+           border-radius:6px;padding:8px;font:inherit}
+  input{background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:8px;font:inherit}
+  #authform{flex-direction:column;border:0;padding:0}
+  iframe{flex:1;border:0;background:#fff}
+  a{color:var(--accent)}
+  #preview header span{display:flex;gap:8px;align-items:center}
+  dialog{background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:10px;
+         width:min(600px,92vw);max-height:80vh;padding:16px}
+  dialog::backdrop{background:#0009}
+  #histlist{max-height:55vh;padding:0}
+  #histlist li{display:flex;justify-content:space-between;align-items:center;gap:10px;cursor:default}
+  #histlist small{color:var(--dim);display:block}
+  .tag{color:var(--dim);font-size:12px}
+</style>
+</head>
+<body>
+<aside>
+  <header><b>Projects</b><button id="new">+ New</button></header>
+  <ul id="projects"></ul>
+  <div id="me" style="padding:8px 12px;border-top:1px solid var(--line);color:var(--dim);font-size:12px"></div>
+  <footer>
+    <button id="rename" class="ghost" disabled>Rename</button>
+    <button id="del" class="ghost danger" disabled>Delete</button>
+    <button id="logout" class="ghost">Log out</button>
+  </footer>
+</aside>
+
+<section id="chat">
+  <header><b id="title">No project</b><span id="status"></span></header>
+  <div id="msgs"></div>
+  <details><summary>Agent log</summary><pre id="log"></pre></details>
+  <form id="form">
+    <textarea id="input" rows="3" placeholder="Describe the site or the change you want. Cmd+Enter to send." disabled></textarea>
+    <button id="send" disabled>Send</button>
+  </form>
+</section>
+
+<section id="preview">
+  <header>
+    <b>Preview</b>
+    <span>
+      <button id="history" class="ghost" disabled>History</button>
+      <button id="publish" disabled>Publish</button>
+      <a id="live" target="_blank" rel="noopener" hidden>Live site</a>
+      <button id="reload" class="ghost">Reload</button>
+      <a id="open" target="_blank">Open</a>
+    </span>
+  </header>
+  <iframe id="frame"></iframe>
+</section>
+
+<dialog id="hist">
+  <h3 style="margin-top:0">Versions</h3>
+  <ul id="histlist"></ul>
+  <div style="text-align:right;margin-top:10px"><button id="histclose" class="ghost">Close</button></div>
+</dialog>
+
+<dialog id="auth">
+  <h3 style="margin-top:0" id="authtitle">Log in</h3>
+  <form id="authform">
+    <input id="email" type="email" placeholder="Email" autocomplete="username" required>
+    <input id="password" type="password" placeholder="Password (10+ characters)" autocomplete="current-password" required>
+    <input id="code" placeholder="Invite code" hidden>
+    <div id="autherr" style="color:#ff8a8a;min-height:1.2em"></div>
+    <button id="authgo">Log in</button>
+    <a href="#" id="authswitch">Create an account</a>
+  </form>
+</dialog>
+
+<script>
+const $ = id => document.getElementById(id);
+let current = null, busy = false, info = null, signup = false;
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  if (r.status === 401 && !path.startsWith('/api/auth/')) { showAuth(); throw new Error('Please log in'); }
+  if (!r.ok) {
+    let d = r.statusText;
+    try { d = (await r.json()).detail || d; } catch {}
+    throw new Error(d);
+  }
+  return r.json();
+}
+const send = (method, path, body) => api(path, {method, headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body || {})});
+const post = (path, body) => send('POST', path, body);
+
+function setBusy(b) {
+  busy = b;
+  const off = b || !current;
+  $('input').disabled = $('send').disabled = off;
+  $('history').disabled = $('publish').disabled = off;
+  $('rename').disabled = $('del').disabled = off;
+  if (!b) $('status').textContent = '';
+}
+
+function addMsg(role, text) {
+  const d = document.createElement('div');
+  d.className = 'msg ' + role;
+  d.textContent = text;            // textContent only: model output is never treated as HTML
+  $('msgs').append(d);
+  $('msgs').scrollTop = 1e9;
+}
+
+async function loadProjects() {
+  const list = await api('/api/projects');
+  const ul = $('projects');
+  ul.innerHTML = '';
+  for (const p of list) {
+    const li = document.createElement('li');
+    li.textContent = p.name;
+    if (current && current.id === p.id) li.className = 'sel';
+    li.onclick = () => { if (!busy) select(p); };
+    ul.append(li);
+  }
+  return list;
+}
+
+async function select(p) {
+  current = p;
+  location.hash = p.id;
+  $('title').textContent = p.name;
+  $('msgs').innerHTML = '';
+  for (const m of await api(`/api/projects/${p.id}/messages`)) addMsg(m.role, m.content);
+  const url = `http://localhost:${p.port}`;
+  $('frame').src = url;
+  $('open').href = url;
+  $('live').hidden = !p.url;
+  if (p.url) $('live').href = p.url;
+  setBusy(busy);
+  loadProjects();
+}
+
+async function refreshMe() {
+  info = await api('/api/me');
+  const runs = info.runs_max == null ? '' : ` · builds today ${info.runs_used}/${info.runs_max}`;
+  const projs = info.projects_max == null ? '' : ` · projects ${info.projects_used}/${info.projects_max}`;
+  $('me').textContent = info.email + runs + projs;
+  $('publish').style.display = info.publish_enabled ? '' : 'none';
+}
+
+function stream(runId) {
+  setBusy(true);
+  $('log').textContent = '';
+  const es = new EventSource(`/api/runs/${runId}/stream`);
+  es.onmessage = e => {
+    const line = JSON.parse(e.data);
+    $('log').textContent += line + '\n';
+    $('log').scrollTop = 1e9;
+    if (line.trim()) $('status').textContent = line.trim();
+  };
+  es.addEventListener('end', async () => {
+    es.close();
+    setBusy(false);
+    if (current) {
+      const list = await loadProjects();
+      current = list.find(x => x.id === current.id) || current;
+      await select(current);        // reloads messages (with the final summary), preview and live link
+    }
+    try { await refreshMe(); } catch {}
+  });
+}
+
+$('form').onsubmit = async e => {
+  e.preventDefault();
+  const text = $('input').value.trim();
+  if (!text || !current || busy) return;
+  try {
+    const r = await post(`/api/projects/${current.id}/chat`, {message: text});
+    addMsg('user', text);
+    $('input').value = '';
+    stream(r.run_id);
+  } catch (err) {
+    addMsg('assistant', 'Error: ' + err.message);
+  }
+};
+$('input').onkeydown = e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) $('form').requestSubmit(); };
+
+$('new').onclick = async () => {
+  const name = prompt('Project name?');
+  if (!name) return;
+  $('status').textContent = 'creating project...';
+  try {
+    const p = await post('/api/projects', {name});
+    await select(p);
+    await refreshMe();
+  } catch (err) { alert(err.message); }
+  $('status').textContent = '';
+};
+
+$('rename').onclick = async () => {
+  if (!current) return;
+  const name = prompt('New name?', current.name);
+  if (!name || !name.trim()) return;
+  try {
+    await send('PATCH', `/api/projects/${current.id}`, {name});
+    const list = await loadProjects();
+    current = list.find(x => x.id === current.id) || current;
+    $('title').textContent = current.name;
+  } catch (err) { alert(err.message); }
+};
+
+$('del').onclick = async () => {
+  if (!current || !confirm(`Delete "${current.name}" and all of its code? This cannot be undone.`)) return;
+  try {
+    const r = await send('DELETE', `/api/projects/${current.id}`);
+    if (r.site) alert(`The published copy is still live on Cloudflare. Remove it with:\n\nwrangler pages project delete ${r.site}`);
+  } catch (err) { alert(err.message); return; }
+  current = null;
+  const list = await loadProjects();
+  if (list[0]) {
+    await select(list[0]);
+  } else {
+    $('title').textContent = 'No project';
+    $('msgs').innerHTML = '';
+    $('frame').removeAttribute('src');
+    $('live').hidden = true;
+    setBusy(false);
+  }
+  try { await refreshMe(); } catch {}
+};
+
+$('history').onclick = async () => {
+  if (!current) return;
+  let list;
+  try { list = await api(`/api/projects/${current.id}/history`); } catch (err) { return alert(err.message); }
+  const ul = $('histlist');
+  ul.innerHTML = '';
+  list.forEach((h, i) => {
+    const li = document.createElement('li');
+    const box = document.createElement('div');
+    const title = document.createElement('div');
+    title.textContent = (h.subject.startsWith('FAILED') ? '⚠ ' : '') + h.subject;
+    const when = document.createElement('small');
+    when.textContent = new Date(h.time * 1000).toLocaleString();
+    box.append(title, when);
+    li.append(box);
+    if (i === 0) {
+      const t = document.createElement('span');
+      t.className = 'tag';
+      t.textContent = 'current';
+      li.append(t);
+    } else {
+      const b = document.createElement('button');
+      b.textContent = 'Restore';
+      b.onclick = () => restore(h.sha);
+      li.append(b);
+    }
+    ul.append(li);
+  });
+  $('hist').showModal();
+};
+$('histclose').onclick = () => $('hist').close();
+
+async function restore(sha) {
+  if (!confirm('Restore this version? Your current state is saved first, so you can undo this later.')) return;
+  $('hist').close();
+  setBusy(true);
+  $('status').textContent = 'restoring...';
+  try { await post(`/api/projects/${current.id}/restore`, {sha}); }
+  catch (err) { alert(err.message); }
+  setBusy(false);
+  await select(current);
+}
+
+$('publish').onclick = async () => {
+  if (!current || busy) return;
+  if (!confirm('Publish this site to the public internet on Cloudflare?\n\n' +
+               'Check first that placeholder phone numbers, addresses, prices and testimonials are replaced with real details.')) return;
+  try {
+    const r = await post(`/api/projects/${current.id}/publish`);
+    addMsg('assistant', 'Publishing...');
+    stream(r.run_id);
+  } catch (err) { addMsg('assistant', 'Error: ' + err.message); }
+};
+
+$('reload').onclick = () => { $('frame').src = $('frame').src; };
+
+// ---------- login / signup ----------
+function showAuth() { if (!$('auth').open) $('auth').showModal(); }
+$('auth').addEventListener('cancel', e => e.preventDefault());   // Esc must not dismiss the login box
+
+$('authswitch').onclick = e => {
+  e.preventDefault();
+  signup = !signup;
+  $('authtitle').textContent = $('authgo').textContent = signup ? 'Create account' : 'Log in';
+  $('authswitch').textContent = signup ? 'I already have an account' : 'Create an account';
+  $('code').hidden = !signup;
+  $('password').autocomplete = signup ? 'new-password' : 'current-password';
+};
+$('authform').onsubmit = async e => {
+  e.preventDefault();
+  $('autherr').textContent = '';
+  try {
+    await post(signup ? '/api/auth/register' : '/api/auth/login',
+               {email: $('email').value, password: $('password').value, code: $('code').value});
+    $('password').value = '';
+    $('auth').close();
+    await boot();
+  } catch (err) { $('autherr').textContent = err.message; }
+};
+$('logout').onclick = async () => { try { await post('/api/auth/logout'); } catch {} location.reload(); };
+
+// ---------- boot ----------
+async function boot() {
+  try { await refreshMe(); } catch { return; }       // api() already opened the login dialog on a 401
+  current = null;
+  const list = await loadProjects();
+  const st = await api('/api/status');
+  const id = st.project || location.hash.slice(1);
+  const p = list.find(x => x.id === id) || list[0];
+  if (p) await select(p);
+  if (st.run_id) stream(st.run_id);      // re-attach to a job that is still going after a page refresh
+}
+boot();
+</script>
+</body>
+</html>

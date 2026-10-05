@@ -1,0 +1,6 @@
+.venv/
+projects/
+.env
+__pycache__/
+screenshots/
+builder.db
