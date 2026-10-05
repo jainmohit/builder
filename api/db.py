@@ -26,6 +26,9 @@ def init():
       is_admin INTEGER NOT NULL DEFAULT 0, created_at REAL NOT NULL);
     CREATE TABLE IF NOT EXISTS sessions(
       token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL, expires_at REAL NOT NULL);
+    CREATE TABLE IF NOT EXISTS flags(
+      id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, project_id TEXT,
+      kind TEXT NOT NULL, category TEXT NOT NULL, detail TEXT NOT NULL, created_at REAL NOT NULL);
     """)
 
     def add_col(table, col, decl):
@@ -37,6 +40,8 @@ def init():
     add_col("projects", "url", "TEXT")
     add_col("projects", "user_id", "INTEGER")
     add_col("runs", "user_id", "INTEGER")
+    add_col("runs", "tokens", "INTEGER NOT NULL DEFAULT 0")
+    add_col("users", "suspended", "INTEGER NOT NULL DEFAULT 0")
 
     c.commit()
     c.close()

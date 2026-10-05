@@ -1,6 +1,6 @@
 import json
 from collections import Counter
-from .llm import client, MODEL
+from .llm import complete
 from .prompts import SYSTEM_PROMPT
 from .tools import Sandbox, TOOLS, dispatch
 from .verify import verify
@@ -30,10 +30,7 @@ def run_agent(project_id: str, task: str, max_steps: int = 40) -> bool:
 
     for step in range(1, max_steps + 1):
         compact(messages)
-        resp = client.chat.completions.create(
-            max_tokens=6000, model=MODEL, messages=messages, tools=TOOLS, temperature=0.2,
-        )
-        msg = resp.choices[0].message
+        msg = complete(messages, tools=TOOLS)
         calls = msg.tool_calls or []
 
         assistant = {"role": "assistant", "content": msg.content or ""}

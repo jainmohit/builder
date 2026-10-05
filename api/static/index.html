@@ -169,7 +169,8 @@ async function refreshMe() {
   info = await api('/api/me');
   const runs = info.runs_max == null ? '' : ` · builds today ${info.runs_used}/${info.runs_max}`;
   const projs = info.projects_max == null ? '' : ` · projects ${info.projects_used}/${info.projects_max}`;
-  $('me').textContent = info.email + runs + projs;
+  const toks = info.tokens_max == null ? '' : ` · tokens today ${Math.round(info.tokens_used / 1000)}k/${Math.round(info.tokens_max / 1000)}k`;
+  $('me').textContent = info.email + runs + projs + toks;
   $('publish').style.display = info.publish_enabled ? '' : 'none';
 }
 
@@ -337,7 +338,7 @@ $('logout').onclick = async () => { try { await post('/api/auth/logout'); } catc
 
 // ---------- boot ----------
 async function boot() {
-  try { await refreshMe(); } catch { return; }       // api() already opened the login dialog on a 401
+    try { await refreshMe(); } catch (e) { if (e.message !== 'Please log in') $('me').textContent = e.message; return; }
   current = null;
   const list = await loadProjects();
   const st = await api('/api/status');
